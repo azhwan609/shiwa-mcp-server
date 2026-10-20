@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: deep-shiwa-ai-mcp
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: MCP_API_KEY
+        generateValue: true
+      - key: INSTAGRAM_SESSIONID
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: MAX_MEDIA_BYTES
+        value: "26214400"
