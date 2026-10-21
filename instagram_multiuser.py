@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import requests
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
@@ -70,10 +70,39 @@ def _state_signature(payload: str) -> str:
 
 
 def _make_state(user_id: str) -> str:
+    nonce = secrets.token_urlsafe(32)
+    issued_at = int(time.time())
+    from datetime import datetime, timedelta, timezone
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=STATE_TTL_SECONDS)).isoformat()
+    _db_request(
+        "POST", "instagram_oauth_states",
+        body=[{"nonce": nonce, "user_id": user_id, "expires_at": expires_at}],
+        prefer="return=minimal",
+    )
     payload = base64.urlsafe_b64encode(json.dumps({
-        "sub": user_id, "iat": int(time.time()), "nonce": secrets.token_urlsafe(18)
+        "sub": user_id, "iat": issued_at, "nonce": nonce
     }, separators=(",", ":")).encode()).decode().rstrip("=")
     return payload + "." + _state_signature(payload)
+
+
+def _consume_state(data: dict[str, Any]) -> None:
+    """Atomically consume a nonce so an OAuth callback cannot be replayed."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    response = _db_request(
+        "PATCH", "instagram_oauth_states",
+        params={
+            "nonce": "eq." + str(data.get("nonce", "")),
+            "user_id": "eq." + str(data.get("sub", "")),
+            "used_at": "is.null",
+            "expires_at": "gt." + now,
+        },
+        body={"used_at": now},
+        prefer="return=representation",
+    )
+    rows = response.json() if response.content else []
+    if not rows:
+        raise HTTPException(status_code=400, detail="Instagram OAuth state was already used or expired. Start the connection again.")
 
 
 def _read_state(state: str) -> dict[str, Any]:
@@ -216,6 +245,7 @@ def instagram_callback(code: str | None = None, state: str | None = None, error:
     if not code or not state:
         raise HTTPException(status_code=400, detail="Instagram did not return both code and state.")
     state_data = _read_state(state)
+    _consume_state(state_data)
     token_data = _exchange_code(code)
     profile = _profile(token_data["access_token"])
     expires_at = None
