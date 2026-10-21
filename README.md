@@ -15,17 +15,15 @@ The frontend uses:
 - `DELETE /connect/telegram/accounts/{connected_account_id}`
 - `POST /connect/execute` for user-authenticated, provider-scoped tool execution
 
+The MCP tools `composio_search_social_tools` and `composio_execute_social_tool` discover and execute actions for the authenticated user's own Composio session. Use a Supabase user access token in the MCP Authorization header for these tools; the shared MCP key is not accepted as a substitute for a user's identity.
+
 The connection callback is `https://deep-shiwa-ai-mcp.onrender.com/connect/callback`. The callback closes the popup and posts a status message to the configured frontend origin. The Telegram toolkit uses a bot-token connection flow hosted by Composio; it is not a personal Telegram-account OAuth login.
 
 ## Render environment
 
-Set these server-side environment variables:
-- `MCP_API_KEY` — existing key for the MCP transport.
-- `SUPABASE_URL` — your Supabase project URL.
-- `SUPABASE_ANON_KEY` — Supabase publishable/anon key used only to validate the signed-in user's session.
-- `COMPOSIO_API_KEY` — the Composio project API key. Keep it server-side; never put it in the frontend.
-- `APP_ORIGIN` — exact deployed SHIWA frontend origin.
-- `MCP_PUBLIC_URL` — public Render URL, normally `https://deep-shiwa-ai-mcp.onrender.com`.
+**Required new setting:** `COMPOSIO_API_KEY` — the Composio project API key, stored only on the server. Copy the existing key from your secret manager into Render's environment settings; never paste it into chat or frontend variables.
+
+The server already has defaults for the current Supabase project, public publishable key, SHIWA Netlify origin, and Render URL. You can override `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `APP_ORIGIN`, and `MCP_PUBLIC_URL` if the deployment URLs change. Keep `MCP_API_KEY` for existing MCP clients.
 
 Do not configure `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`, `INSTAGRAM_SESSIONID`, or a global `TELEGRAM_BOT_TOKEN` for the Composio connection flow. The old global-account MCP actions are intentionally disabled.
 
