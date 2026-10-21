@@ -17,10 +17,16 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_http_request
 from instagrapi import Client as InstagramClient
 from telegram import Bot
 from telegram.error import TelegramError
-from composio_integration import router as composio_router
+from composio_integration import (
+    _current_user,
+    execute_tool_for_user,
+    router as composio_router,
+    search_tools_for_user,
+)
 
 load_dotenv()
 
@@ -32,6 +38,28 @@ INSTAGRAM_SESSIONID = os.getenv("INSTAGRAM_SESSIONID", "").strip()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
 mcp = FastMCP(SERVICE_NAME)
+
+
+@mcp.tool
+def composio_search_social_tools(toolkit: str, query: str) -> dict[str, Any]:
+    """Search Composio's available tools for the signed-in SHIWA user's Instagram or Telegram connection."""
+    request = get_http_request()
+    user = _current_user(request)
+    return search_tools_for_user(user["id"], toolkit, query)
+
+
+@mcp.tool
+def composio_execute_social_tool(
+    toolkit: str,
+    tool_slug: str,
+    arguments: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Execute one Instagram or Telegram Composio tool using only the caller's own connected account."""
+    request = get_http_request()
+    user = _current_user(request)
+    return execute_tool_for_user(user["id"], toolkit, tool_slug, arguments)
+
+
 _instagram_client: InstagramClient | None = None
 _instagram_lock = threading.RLock()
 
@@ -272,17 +300,17 @@ app.include_router(composio_router)
 @app.middleware("http")
 async def protect_mcp(request: Request, call_next):
     if request.url.path == "/mcp" or request.url.path.startswith("/mcp/"):
-        if not MCP_API_KEY:
-            return JSONResponse(
-                status_code=503,
-                content={"detail": "Server misconfigured: MCP_API_KEY is missing."},
-            )
         supplied = request.headers.get("authorization", "")
-        expected = f"Bearer {MCP_API_KEY}"
-        # Compare constant-time to avoid leaking key bytes through timing.
+        expected = f"Bearer {MCP_API_KEY}" if MCP_API_KEY else ""
+        # Existing server key remains valid for legacy MCP clients, but Composio
+        # tools still require a real Supabase user bearer token in the tool context.
         import hmac
-        if not hmac.compare_digest(supplied, expected):
-            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+        if MCP_API_KEY and hmac.compare_digest(supplied, expected):
+            return await call_next(request)
+        try:
+            _current_user(request)
+        except Exception:
+            return JSONResponse(status_code=401, content={"detail": "Use a valid Supabase user access token for user-scoped Composio tools."})
     return await call_next(request)
 
 
@@ -292,7 +320,7 @@ async def root():
         "service": SERVICE_NAME,
         "status": "running",
         "mcp_endpoint": "/mcp",
-        "auth": "Bearer MCP_API_KEY required for MCP requests",
+        "auth": "MCP_API_KEY for legacy clients; Supabase user bearer token for user-scoped Composio tools",
     }
 
 
