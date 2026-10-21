@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastmcp import FastMCP
 from instagrapi import Client as InstagramClient
@@ -26,6 +27,7 @@ load_dotenv()
 SERVICE_NAME = "DEEP-SHIWA-AI"
 MAX_MEDIA_BYTES = int(os.getenv("MAX_MEDIA_BYTES", str(25 * 1024 * 1024)))
 MCP_API_KEY = os.getenv("MCP_API_KEY", "").strip()
+APP_ORIGIN = os.getenv("APP_ORIGIN", "").rstrip("/")
 INSTAGRAM_SESSIONID = os.getenv("INSTAGRAM_SESSIONID", "").strip()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
@@ -254,6 +256,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Browser calls from the SHIWA frontend need CORS for the exact configured origin.
+# Keep this origin explicit; do not use wildcard origins for an authenticated API.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[APP_ORIGIN] if APP_ORIGIN else [],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "apikey"],
+)
 
 app.include_router(instagram_oauth_router)
 
