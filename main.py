@@ -19,6 +19,7 @@ from fastmcp import FastMCP
 from instagrapi import Client as InstagramClient
 from telegram import Bot
 from telegram.error import TelegramError
+from instagram_multiuser import router as instagram_oauth_router
 
 load_dotenv()
 
@@ -252,6 +253,9 @@ app = FastAPI(
     description="Authenticated MCP bridge for Instagram and Telegram.",
     lifespan=lifespan,
 )
+
+
+app.include_router(instagram_oauth_router)
 
 
 @app.middleware("http")
