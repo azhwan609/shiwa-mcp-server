@@ -11,10 +11,10 @@ from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/connect", tags=["Composio connections"])
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://cnwowumvrbawuicueskb.supabase.co").rstrip("/")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "sb_publishable_3AKixcRmPJDhexKEd4Qnqg_JY9wQ-hi").strip()
 COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
-APP_ORIGIN = os.getenv("APP_ORIGIN", "").rstrip("/")
+APP_ORIGIN = os.getenv("APP_ORIGIN", "https://shiwa-creator-hub-49bd8d.netlify.app").rstrip("/")
 MCP_PUBLIC_URL = os.getenv("MCP_PUBLIC_URL", "https://deep-shiwa-ai-mcp.onrender.com").rstrip("/")
 HTTP_TIMEOUT = (8, 25)
 SUPPORTED_TOOLKITS = {"instagram", "telegram"}
@@ -40,8 +40,6 @@ def _composio():
 
 
 def _current_user(request: Request) -> dict[str, str]:
-    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-        raise HTTPException(status_code=503, detail="Supabase session verification is not configured.")
     auth = request.headers.get("authorization", "")
     if not auth.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="A valid SHIWA user session is required.")
@@ -180,8 +178,6 @@ async def composio_callback(request: Request):
 async def start_connection(toolkit: str, request: Request):
     provider = _toolkit(toolkit)
     user = _current_user(request)
-    if not APP_ORIGIN:
-        raise HTTPException(status_code=503, detail="APP_ORIGIN is missing on the server.")
     session = _session(user["id"], [provider])
     callback_url = f"{MCP_PUBLIC_URL}/connect/callback?provider={provider}"
     try:
