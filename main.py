@@ -284,14 +284,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Browser calls from the SHIWA frontend need CORS for the exact configured origin.
-# Keep this origin explicit; do not use wildcard origins for an authenticated API.
+# Browser calls from SHIWA's current and legacy public frontends need CORS.
+# Keep the allowed origins explicit; never allow every origin on an authenticated API.
+SHIWA_FRONTEND_ORIGINS = {
+    APP_ORIGIN,
+    "https://shiwa-creator-hub-v2.onrender.com",
+    "https://shiwa-creator-hub-azhwan-2026.onrender.com",
+    "https://shiwa-creator-hub-49bd8d.netlify.app",
+    "https://shiwa-creator-hub1.netlify.app",
+}
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[APP_ORIGIN] if APP_ORIGIN else [],
+    allow_origins=sorted(origin for origin in SHIWA_FRONTEND_ORIGINS if origin),
     allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "apikey"],
+    allow_headers=["*"],
 )
 
 app.include_router(composio_router)
