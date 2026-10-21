@@ -20,7 +20,7 @@ from fastmcp import FastMCP
 from instagrapi import Client as InstagramClient
 from telegram import Bot
 from telegram.error import TelegramError
-from instagram_multiuser import router as instagram_oauth_router
+from composio_integration import router as composio_router
 
 load_dotenv()
 
@@ -196,7 +196,7 @@ def instagram_recent_comments(limit: int = 5) -> dict[str, Any]:
     return {"ok": True, "comments": output[:100]}
 
 
-@mcp.tool
+# Disabled: this legacy tool used a single global TELEGRAM_BOT_TOKEN.
 async def telegram_send_message(chat_id: str, text: str) -> dict[str, Any]:
     """Send a Telegram message to a chat ID the bot is allowed to message."""
     if not text.strip():
@@ -209,7 +209,7 @@ async def telegram_send_message(chat_id: str, text: str) -> dict[str, Any]:
         raise RuntimeError(f"Telegram API error: {exc}") from exc
 
 
-@mcp.tool
+# Disabled: this legacy tool used a single global TELEGRAM_BOT_TOKEN.
 async def telegram_recent_messages(chat_id: str, limit: int = 10) -> dict[str, Any]:
     """Read recent pending Telegram updates for a chat. Bot API cannot fetch arbitrary old chat history."""
     limit = max(1, min(int(limit), 100))
@@ -266,7 +266,7 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "apikey"],
 )
 
-app.include_router(instagram_oauth_router)
+app.include_router(composio_router)
 
 
 @app.middleware("http")
