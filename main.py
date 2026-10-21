@@ -33,7 +33,7 @@ load_dotenv()
 SERVICE_NAME = "DEEP-SHIWA-AI"
 MAX_MEDIA_BYTES = int(os.getenv("MAX_MEDIA_BYTES", str(25 * 1024 * 1024)))
 MCP_API_KEY = os.getenv("MCP_API_KEY", "").strip()
-APP_ORIGIN = os.getenv("APP_ORIGIN", "").rstrip("/")
+APP_ORIGIN = os.getenv("APP_ORIGIN", "https://shiwa-creator-hub-49bd8d.netlify.app").rstrip("/")
 INSTAGRAM_SESSIONID = os.getenv("INSTAGRAM_SESSIONID", "").strip()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
