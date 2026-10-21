@@ -79,6 +79,40 @@ def _session(user_id: str, toolkits: list[str] | None = None):
         raise HTTPException(status_code=502, detail="Composio could not create a user-scoped session.") from exc
 
 
+def search_tools_for_user(user_id: str, provider: str, query: str) -> dict[str, Any]:
+    provider = _toolkit(provider)
+    session = _session(user_id, [provider])
+    try:
+        result = session.search(query)
+        if hasattr(result, "model_dump"):
+            return result.model_dump(mode="json")
+        if isinstance(result, dict):
+            return result
+        return {"result": str(result)}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Composio could not search {provider} tools.") from exc
+
+
+def execute_tool_for_user(user_id: str, provider: str, tool_slug: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    provider = _toolkit(provider)
+    slug = tool_slug.strip().upper()
+    expected_prefix = "INSTAGRAM_" if provider == "instagram" else "TELEGRAM_"
+    if not slug.startswith(expected_prefix) or len(slug) > 120:
+        raise HTTPException(status_code=400, detail="Tool slug does not match the selected provider.")
+    session = _session(user_id, [provider])
+    try:
+        result = session.execute(slug, arguments=arguments or {})
+        if hasattr(result, "model_dump"):
+            result = result.model_dump(mode="json")
+        elif not isinstance(result, (dict, list, str, int, float, bool, type(None))):
+            result = str(result)
+        return {"ok": True, "provider": provider, "result": result}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Composio could not execute {provider} tool {slug}.") from exc
+
+
 def _connection_rows(session, toolkit: str) -> list[dict[str, Any]]:
     try:
         details = session.toolkits(toolkits=[toolkit], limit=20)
