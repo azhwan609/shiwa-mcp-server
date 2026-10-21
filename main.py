@@ -114,7 +114,7 @@ def _download_public_media(url: str, allowed_suffixes: tuple[str, ...]) -> Path:
         response.close()
 
 
-@mcp.tool
+# Disabled: this legacy tool used a single global INSTAGRAM_SESSIONID.
 def instagram_post_photo(media_url: str, caption: str = "") -> dict[str, Any]:
     """Publish a photo to the authenticated Instagram account from a public HTTPS media URL."""
     path = _download_public_media(media_url, (".jpg", ".jpeg", ".png", ".webp"))
@@ -127,7 +127,7 @@ def instagram_post_photo(media_url: str, caption: str = "") -> dict[str, Any]:
         path.unlink(missing_ok=True)
 
 
-@mcp.tool
+# Disabled: this legacy tool used a single global INSTAGRAM_SESSIONID.
 def instagram_post_video(media_url: str, caption: str = "") -> dict[str, Any]:
     """Publish a video/reel to Instagram from a public HTTPS media URL."""
     path = _download_public_media(media_url, (".mp4", ".mov", ".m4v"))
@@ -140,7 +140,7 @@ def instagram_post_video(media_url: str, caption: str = "") -> dict[str, Any]:
         path.unlink(missing_ok=True)
 
 
-@mcp.tool
+# Disabled: this legacy tool used a single global INSTAGRAM_SESSIONID.
 def instagram_upload_story(media_url: str, media_type: str = "photo") -> dict[str, Any]:
     """Upload an Instagram story. media_type must be 'photo' or 'video'."""
     kind = media_type.strip().lower()
@@ -157,7 +157,7 @@ def instagram_upload_story(media_url: str, media_type: str = "photo") -> dict[st
         path.unlink(missing_ok=True)
 
 
-@mcp.tool
+# Disabled: this legacy tool used a single global INSTAGRAM_SESSIONID.
 def instagram_send_dm(username: str, message: str) -> dict[str, Any]:
     """Send a direct message to an Instagram username."""
     username = username.strip().lstrip("@")
@@ -170,7 +170,7 @@ def instagram_send_dm(username: str, message: str) -> dict[str, Any]:
     return {"ok": True, "thread_or_message_id": str(getattr(result, "id", "")), "recipient": username}
 
 
-@mcp.tool
+# Disabled: this legacy tool used a single global INSTAGRAM_SESSIONID.
 def instagram_recent_comments(limit: int = 5) -> dict[str, Any]:
     """Fetch comments on recent media owned by the authenticated Instagram account."""
     limit = max(1, min(int(limit), 20))
