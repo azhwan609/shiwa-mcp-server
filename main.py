@@ -14,21 +14,52 @@ from urllib.parse import urlparse
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_http_request
 from instagrapi import Client as InstagramClient
 from telegram import Bot
 from telegram.error import TelegramError
+from composio_integration import (
+    _current_user,
+    execute_tool_for_user,
+    router as composio_router,
+    search_tools_for_user,
+)
 
 load_dotenv()
 
 SERVICE_NAME = "DEEP-SHIWA-AI"
 MAX_MEDIA_BYTES = int(os.getenv("MAX_MEDIA_BYTES", str(25 * 1024 * 1024)))
 MCP_API_KEY = os.getenv("MCP_API_KEY", "").strip()
+APP_ORIGIN = os.getenv("APP_ORIGIN", "https://shiwa-creator-hub-49bd8d.netlify.app").rstrip("/")
 INSTAGRAM_SESSIONID = os.getenv("INSTAGRAM_SESSIONID", "").strip()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
 mcp = FastMCP(SERVICE_NAME)
+
+
+@mcp.tool
+def composio_search_social_tools(toolkit: str, query: str) -> dict[str, Any]:
+    """Search Composio's available tools for the signed-in SHIWA user's Instagram or Telegram connection."""
+    request = get_http_request()
+    user = _current_user(request)
+    return search_tools_for_user(user["id"], toolkit, query)
+
+
+@mcp.tool
+def composio_execute_social_tool(
+    toolkit: str,
+    tool_slug: str,
+    arguments: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Execute one Instagram or Telegram Composio tool using only the caller's own connected account."""
+    request = get_http_request()
+    user = _current_user(request)
+    return execute_tool_for_user(user["id"], toolkit, tool_slug, arguments)
+
+
 _instagram_client: InstagramClient | None = None
 _instagram_lock = threading.RLock()
 
@@ -111,7 +142,7 @@ def _download_public_media(url: str, allowed_suffixes: tuple[str, ...]) -> Path:
         response.close()
 
 
-@mcp.tool
+# Disabled: this legacy tool used a single global INSTAGRAM_SESSIONID.
 def instagram_post_photo(media_url: str, caption: str = "") -> dict[str, Any]:
     """Publish a photo to the authenticated Instagram account from a public HTTPS media URL."""
     path = _download_public_media(media_url, (".jpg", ".jpeg", ".png", ".webp"))
@@ -124,7 +155,7 @@ def instagram_post_photo(media_url: str, caption: str = "") -> dict[str, Any]:
         path.unlink(missing_ok=True)
 
 
-@mcp.tool
+# Disabled: this legacy tool used a single global INSTAGRAM_SESSIONID.
 def instagram_post_video(media_url: str, caption: str = "") -> dict[str, Any]:
     """Publish a video/reel to Instagram from a public HTTPS media URL."""
     path = _download_public_media(media_url, (".mp4", ".mov", ".m4v"))
@@ -137,7 +168,7 @@ def instagram_post_video(media_url: str, caption: str = "") -> dict[str, Any]:
         path.unlink(missing_ok=True)
 
 
-@mcp.tool
+# Disabled: this legacy tool used a single global INSTAGRAM_SESSIONID.
 def instagram_upload_story(media_url: str, media_type: str = "photo") -> dict[str, Any]:
     """Upload an Instagram story. media_type must be 'photo' or 'video'."""
     kind = media_type.strip().lower()
@@ -154,7 +185,7 @@ def instagram_upload_story(media_url: str, media_type: str = "photo") -> dict[st
         path.unlink(missing_ok=True)
 
 
-@mcp.tool
+# Disabled: this legacy tool used a single global INSTAGRAM_SESSIONID.
 def instagram_send_dm(username: str, message: str) -> dict[str, Any]:
     """Send a direct message to an Instagram username."""
     username = username.strip().lstrip("@")
@@ -167,7 +198,7 @@ def instagram_send_dm(username: str, message: str) -> dict[str, Any]:
     return {"ok": True, "thread_or_message_id": str(getattr(result, "id", "")), "recipient": username}
 
 
-@mcp.tool
+# Disabled: this legacy tool used a single global INSTAGRAM_SESSIONID.
 def instagram_recent_comments(limit: int = 5) -> dict[str, Any]:
     """Fetch comments on recent media owned by the authenticated Instagram account."""
     limit = max(1, min(int(limit), 20))
@@ -193,7 +224,7 @@ def instagram_recent_comments(limit: int = 5) -> dict[str, Any]:
     return {"ok": True, "comments": output[:100]}
 
 
-@mcp.tool
+# Disabled: this legacy tool used a single global TELEGRAM_BOT_TOKEN.
 async def telegram_send_message(chat_id: str, text: str) -> dict[str, Any]:
     """Send a Telegram message to a chat ID the bot is allowed to message."""
     if not text.strip():
@@ -206,7 +237,7 @@ async def telegram_send_message(chat_id: str, text: str) -> dict[str, Any]:
         raise RuntimeError(f"Telegram API error: {exc}") from exc
 
 
-@mcp.tool
+# Disabled: this legacy tool used a single global TELEGRAM_BOT_TOKEN.
 async def telegram_recent_messages(chat_id: str, limit: int = 10) -> dict[str, Any]:
     """Read recent pending Telegram updates for a chat. Bot API cannot fetch arbitrary old chat history."""
     limit = max(1, min(int(limit), 100))
@@ -253,21 +284,33 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Browser calls from the SHIWA frontend need CORS for the exact configured origin.
+# Keep this origin explicit; do not use wildcard origins for an authenticated API.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[APP_ORIGIN] if APP_ORIGIN else [],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "apikey"],
+)
+
+app.include_router(composio_router)
+
 
 @app.middleware("http")
 async def protect_mcp(request: Request, call_next):
     if request.url.path == "/mcp" or request.url.path.startswith("/mcp/"):
-        if not MCP_API_KEY:
-            return JSONResponse(
-                status_code=503,
-                content={"detail": "Server misconfigured: MCP_API_KEY is missing."},
-            )
         supplied = request.headers.get("authorization", "")
-        expected = f"Bearer {MCP_API_KEY}"
-        # Compare constant-time to avoid leaking key bytes through timing.
+        expected = f"Bearer {MCP_API_KEY}" if MCP_API_KEY else ""
+        # Existing server key remains valid for legacy MCP clients, but Composio
+        # tools still require a real Supabase user bearer token in the tool context.
         import hmac
-        if not hmac.compare_digest(supplied, expected):
-            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+        if MCP_API_KEY and hmac.compare_digest(supplied, expected):
+            return await call_next(request)
+        try:
+            _current_user(request)
+        except Exception:
+            return JSONResponse(status_code=401, content={"detail": "Use a valid Supabase user access token for user-scoped Composio tools."})
     return await call_next(request)
 
 
@@ -277,7 +320,7 @@ async def root():
         "service": SERVICE_NAME,
         "status": "running",
         "mcp_endpoint": "/mcp",
-        "auth": "Bearer MCP_API_KEY required for MCP requests",
+        "auth": "MCP_API_KEY for legacy clients; Supabase user bearer token for user-scoped Composio tools",
     }
 
 
