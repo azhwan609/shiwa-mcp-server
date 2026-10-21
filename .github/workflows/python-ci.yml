@@ -1,0 +1,34 @@
+name: Python validation
+
+on:
+  pull_request:
+  push:
+    branches: [main, feature/multi-user-instagram-oauth]
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile Python sources
+        run: python -m compileall -q .
+      - name: Validate required OAuth code markers
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path("instagram_multiuser.py").read_text()
+          required = [
+              "def _consume_state",
+              "_consume_state(state_data)",
+              "instagram_oauth_states",
+              "TOKEN_ENCRYPTION_KEY",
+              "user_id",
+          ]
+          missing = [item for item in required if item not in source]
+          if missing:
+              raise SystemExit(f"Missing OAuth security components: {missing}")
+          print("OAuth source validation passed.")
+          PY
