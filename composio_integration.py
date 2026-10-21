@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
 import requests
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/connect", tags=["Composio connections"])
@@ -13,6 +15,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
 COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
 APP_ORIGIN = os.getenv("APP_ORIGIN", "").rstrip("/")
+MCP_PUBLIC_URL = os.getenv("MCP_PUBLIC_URL", "https://deep-shiwa-ai-mcp.onrender.com").rstrip("/")
 HTTP_TIMEOUT = (8, 25)
 SUPPORTED_TOOLKITS = {"instagram", "telegram"}
 
@@ -98,14 +101,45 @@ def _connection_rows(session, toolkit: str) -> list[dict[str, Any]]:
         state_value = state_data.get("val", {})
         if not isinstance(state_value, dict):
             state_value = {}
+        account_id = str(getattr(connected_account, "id", "") or "")
+        active = bool(getattr(connection, "is_active", False))
+        if not account_id or not active:
+            continue
         rows.append({
-            "id": str(getattr(connected_account, "id", "") or ""),
+            "id": account_id,
             "toolkit": toolkit,
-            "status": str(getattr(connected_account, "status", "") or ("ACTIVE" if getattr(connection, "is_active", False) else "NOT_CONNECTED")),
-            "connected": bool(getattr(connection, "is_active", False)),
+            "status": str(getattr(connected_account, "status", "") or "ACTIVE"),
+            "connected": True,
             "display_name": str(state_value.get("displayName") or state_value.get("display_name") or ""),
         })
     return rows
+
+
+@router.get("/callback", response_class=HTMLResponse)
+async def composio_callback(request: Request):
+    provider = request.query_params.get("provider", "").strip().lower()
+    status = request.query_params.get("status", "").strip().lower()
+    if provider not in SUPPORTED_TOOLKITS:
+        provider = ""
+    payload = json.dumps({
+        "type": "shiwa:composio",
+        "provider": provider,
+        "ok": status == "success" and bool(provider),
+    }).replace("<", "\\u003c")
+    target_origin = json.dumps(APP_ORIGIN).replace("<", "\\u003c")
+    message = "اتصال با موفقیت انجام شد. می‌توانید این پنجره را ببندید." if status == "success" else "اتصال کامل نشد. پنجره را ببندید و دوباره تلاش کنید."
+    safe_message = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    html = (
+        '<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>SHIWA · Composio</title><body style="background:#050b12;color:#cdeef5;'
+        'font:16px sans-serif;text-align:center;padding:12vh 24px"><h2>SHIWA · اتصال حساب</h2><p>'
+        + safe_message
+        + '</p><a href="' + (APP_ORIGIN or "/") + '" style="color:#d8b4fe">بازگشت به SHIWA</a>'
+        + '<script>try{if(window.opener){window.opener.postMessage(' + payload + ',' + target_origin
+        + ');setTimeout(function(){window.close()},500)}}catch(e){}</script></body></html>'
+    )
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/{toolkit}/start")
@@ -115,7 +149,7 @@ async def start_connection(toolkit: str, request: Request):
     if not APP_ORIGIN:
         raise HTTPException(status_code=503, detail="APP_ORIGIN is missing on the server.")
     session = _session(user["id"], [provider])
-    callback_url = f"{APP_ORIGIN}/?composio_connected={provider}"
+    callback_url = f"{MCP_PUBLIC_URL}/connect/callback?provider={provider}"
     try:
         connection_request = session.authorize(provider, callback_url=callback_url)
         redirect_url = getattr(connection_request, "redirect_url", None)
@@ -125,7 +159,6 @@ async def start_connection(toolkit: str, request: Request):
     except HTTPException:
         raise
     except Exception as exc:
-        # Do not return SDK/provider internals to an unauthenticated browser.
         raise HTTPException(status_code=502, detail=f"Could not start the {provider} connection in Composio.") from exc
 
 
@@ -148,7 +181,8 @@ async def disconnect_account(toolkit: str, account_id: str, request: Request):
         raise HTTPException(status_code=404, detail="That active connection does not belong to this SHIWA user.")
     try:
         result = composio.connected_accounts.revoke(account_id)
-        return {"ok": True, "provider": provider, "status": str(getattr(result, "status", "REVOKED"))}
+        account = getattr(result, "connected_account", None)
+        return {"ok": True, "provider": provider, "status": str(getattr(account, "status", "REVOKED"))}
     except Exception as exc:
         raise HTTPException(status_code=502, detail="Composio could not revoke this connection.") from exc
 
