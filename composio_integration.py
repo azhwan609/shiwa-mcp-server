@@ -168,8 +168,7 @@ async def composio_callback(request: Request):
         'font:16px sans-serif;text-align:center;padding:12vh 24px"><h2>SHIWA · اتصال حساب</h2><p>'
         + safe_message
         + '</p><a href="' + (APP_ORIGIN or "/") + '" style="color:#d8b4fe">بازگشت به SHIWA</a>'
-        + '<script>try{if(window.opener){window.opener.postMessage(' + payload + ',' + target_origin
-        + ');setTimeout(function(){window.close()},500)}}catch(e){}</script></body></html>'
+        + '<script>(function(){var target=' + target_origin + ';try{if(window.opener){window.opener.postMessage(' + payload + ',target);setTimeout(function(){window.close()},700);return;}}catch(e){}setTimeout(function(){window.location.replace(target)},1600);})();</script></body></html>'
     )
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
