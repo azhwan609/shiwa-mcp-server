@@ -1,0 +1,175 @@
+from __future__ import annotations
+
+import os
+from typing import Any
+
+import requests
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
+
+router = APIRouter(prefix="/connect", tags=["Composio connections"])
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
+COMPOSIO_API_KEY = os.getenv("COMPOSIO_API_KEY", "").strip()
+APP_ORIGIN = os.getenv("APP_ORIGIN", "").rstrip("/")
+HTTP_TIMEOUT = (8, 25)
+SUPPORTED_TOOLKITS = {"instagram", "telegram"}
+
+
+class ExecuteRequest(BaseModel):
+    toolkit: str
+    tool_slug: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+def _composio():
+    if not COMPOSIO_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Composio is not configured on the server. Set COMPOSIO_API_KEY in the server environment.",
+        )
+    try:
+        from composio import Composio
+        return Composio(api_key=COMPOSIO_API_KEY)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Could not initialize the Composio SDK.") from exc
+
+
+def _current_user(request: Request) -> dict[str, str]:
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        raise HTTPException(status_code=503, detail="Supabase session verification is not configured.")
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="A valid SHIWA user session is required.")
+    token = auth.split(" ", 1)[1].strip()
+    try:
+        response = requests.get(
+            f"{SUPABASE_URL}/auth/v1/user",
+            headers={"apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {token}"},
+            timeout=HTTP_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail="Could not verify the SHIWA user session.") from exc
+    if response.status_code != 200:
+        raise HTTPException(status_code=401, detail="SHIWA user session is invalid or expired.")
+    user = response.json()
+    if not user.get("id"):
+        raise HTTPException(status_code=401, detail="Supabase did not return a user identity.")
+    return {"id": str(user["id"])}
+
+
+def _toolkit(value: str) -> str:
+    slug = value.strip().lower()
+    if slug not in SUPPORTED_TOOLKITS:
+        raise HTTPException(status_code=404, detail="Unsupported connection provider.")
+    return slug
+
+
+def _session(user_id: str, toolkits: list[str] | None = None):
+    # The Supabase auth.users UUID is stable and isolates every user's Composio accounts.
+    try:
+        return _composio().create(user_id=user_id, toolkits=toolkits or sorted(SUPPORTED_TOOLKITS))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Composio could not create a user-scoped session.") from exc
+
+
+def _connection_rows(session, toolkit: str) -> list[dict[str, Any]]:
+    try:
+        details = session.toolkits(toolkits=[toolkit], limit=20)
+        items = getattr(details, "items", []) or []
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Could not read this user's Composio connection status.") from exc
+
+    rows: list[dict[str, Any]] = []
+    for item in items:
+        toolkit_obj = getattr(item, "toolkit", None)
+        slug = str(getattr(toolkit_obj, "slug", None) or getattr(item, "slug", None) or toolkit).lower()
+        if slug != toolkit:
+            continue
+        connection = getattr(item, "connection", None)
+        connected_account = getattr(connection, "connected_account", None) if connection else None
+        state = getattr(connected_account, "state", None) if connected_account else None
+        state_data = state.model_dump(mode="json") if hasattr(state, "model_dump") else state
+        if not isinstance(state_data, dict):
+            state_data = {}
+        state_value = state_data.get("val", {})
+        if not isinstance(state_value, dict):
+            state_value = {}
+        rows.append({
+            "id": str(getattr(connected_account, "id", "") or ""),
+            "toolkit": toolkit,
+            "status": str(getattr(connected_account, "status", "") or ("ACTIVE" if getattr(connection, "is_active", False) else "NOT_CONNECTED")),
+            "connected": bool(getattr(connection, "is_active", False)),
+            "display_name": str(state_value.get("displayName") or state_value.get("display_name") or ""),
+        })
+    return rows
+
+
+@router.get("/{toolkit}/start")
+async def start_connection(toolkit: str, request: Request):
+    provider = _toolkit(toolkit)
+    user = _current_user(request)
+    if not APP_ORIGIN:
+        raise HTTPException(status_code=503, detail="APP_ORIGIN is missing on the server.")
+    session = _session(user["id"], [provider])
+    callback_url = f"{APP_ORIGIN}/?composio_connected={provider}"
+    try:
+        connection_request = session.authorize(provider, callback_url=callback_url)
+        redirect_url = getattr(connection_request, "redirect_url", None)
+        if not isinstance(redirect_url, str) or not redirect_url.startswith("https://"):
+            raise ValueError("Composio did not return a valid HTTPS connect link.")
+        return {"authorization_url": redirect_url, "provider": provider}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Do not return SDK/provider internals to an unauthenticated browser.
+        raise HTTPException(status_code=502, detail=f"Could not start the {provider} connection in Composio.") from exc
+
+
+@router.get("/{toolkit}/accounts")
+async def list_connections(toolkit: str, request: Request):
+    provider = _toolkit(toolkit)
+    user = _current_user(request)
+    session = _session(user["id"], [provider])
+    return {"accounts": _connection_rows(session, provider)}
+
+
+@router.delete("/{toolkit}/accounts/{account_id}")
+async def disconnect_account(toolkit: str, account_id: str, request: Request):
+    provider = _toolkit(toolkit)
+    user = _current_user(request)
+    composio = _composio()
+    session = _session(user["id"], [provider])
+    owned = [row for row in _connection_rows(session, provider) if row["id"] == account_id and row["connected"]]
+    if not owned:
+        raise HTTPException(status_code=404, detail="That active connection does not belong to this SHIWA user.")
+    try:
+        result = composio.connected_accounts.revoke(account_id)
+        return {"ok": True, "provider": provider, "status": str(getattr(result, "status", "REVOKED"))}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Composio could not revoke this connection.") from exc
+
+
+@router.post("/execute")
+async def execute_user_tool(payload: ExecuteRequest, request: Request):
+    user = _current_user(request)
+    provider = _toolkit(payload.toolkit)
+    slug = payload.tool_slug.strip().upper()
+    expected_prefix = "INSTAGRAM_" if provider == "instagram" else "TELEGRAM_"
+    if not slug.startswith(expected_prefix):
+        raise HTTPException(status_code=400, detail="Tool slug does not match the selected provider.")
+    if len(slug) > 120:
+        raise HTTPException(status_code=400, detail="Tool slug is invalid.")
+    session = _session(user["id"], [provider])
+    try:
+        result = session.execute(slug, arguments=payload.arguments)
+        if hasattr(result, "model_dump"):
+            result = result.model_dump(mode="json")
+        elif not isinstance(result, (dict, list, str, int, float, bool, type(None))):
+            result = str(result)
+        return {"ok": True, "provider": provider, "result": result}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Composio could not execute {provider} tool {slug}.") from exc
